@@ -1,0 +1,15 @@
+<%- include('parts/top.ejs')%>
+
+<body>
+    <h1>Email Verification</h1>
+    <form action="/verif" method="POST">
+        <label for="email">Email:</label>
+        <input type="email" name="email" id="email" required>
+        <br>
+        <label for="code">Verification Code:</label>
+        <input type="text" name="code" id="code" required>
+        <br>
+        <button type="submit">Verify</button>
+    </form>
+</body>
+<%- include('parts/footer.ejs')%>
