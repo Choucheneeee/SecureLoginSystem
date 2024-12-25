@@ -1,165 +1,136 @@
-const mongo = require('mongoose')
-const bcrypt=require("bcrypt")
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
-var schemaAuth = mongo.Schema({
+const schemaAuth = mongoose.Schema({
     username: String,
     phone: Number,
     email: String,
     password: String,
     verif: Boolean,
-    verificationCode: String,          // Stores the verification code
-    verificationCodeExpires: Date,    // Expiration time for the code
+    verificationCode: String,
+    verificationCodeExpires: Date,
 });
-const nodemailer = require("nodemailer");
-const crypto = require("crypto");
 
+const User = mongoose.model("User", schemaAuth);
 
-var User = mongo.model("User", schemaAuth);
-const url=process.env.url
-console.log("url cha",url)
+const url = process.env.url;
+console.log("MongoDB URL:", url);
+
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, 
-  },
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+    },
 });
-exports.registerFunModel = (name, email, password, phone) => {
-    return new Promise((resolve, reject) => {
-        mongo.connect(url, {
-            serverSelectionTimeoutMS: 80000,
-            socketTimeoutMS: 90000,
-        })
-            .then(() => {
-                return User.findOne({ email: email });
-            })
-            .then((existingUser) => {
-                if (existingUser) {
-                    mongo.disconnect();
-                    reject("The email address is already in use. Please try logging in.");
-                } else {
-                    return bcrypt.hash(password, 10);
-                }
-            })
-            .then((hashedPassword) => {
-                // Generate a verification code
-                const verificationCode = crypto.randomBytes(4).toString("hex"); // 8-character code
-                const verificationCodeExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes expiry
 
-                let user = new User({
-                    username: name,
-                    email: email,
-                    password: hashedPassword,
-                    phone: phone,
-                    verif: false,
-                    verificationCode: verificationCode,
-                    verificationCodeExpires: verificationCodeExpires,
-                });
-                return user.save();
-            })
-            .then((user) => {
-                if (user) {
-                
-                    // Send verification email
-                    const mailOptions = {
-                        from: process.env.EMAIL_USER,
-                        to: email,
-                        subject: "Email Verification",
-                        text: `Your verification code is: ${user.verificationCode}`,
-                    };
-                    console.log(mailOptions,'mailoption')
-
-                    return transporter.sendMail(mailOptions).then(() => {
-                        mongo.disconnect();
-                        resolve("User registered successfully. Please check your email for the verification code.");
-                    });
-                }
-            })
-            .catch((err) => {
-                mongo.disconnect();
-                reject(err);
-            });
-    });
+// Reusable database connection function
+const connectToDatabase = async () => {
+    if (mongoose.connection.readyState === 0) { // Only connect if not already connected
+        await mongoose.connect(url, { useNewUrlParser: true, useUnifiedTopology: true });
+        console.log('Connected to MongoDB successfully.');
+    }
 };
 
-exports.loginFunModel=(email,password)=>{
-    // test email if exit 
-    //(true go to login)
-    //(false add this user to collection)
+// Registration function
+const registerFunModel = async (name, email, password, phone) => {
+    try {
+        await connectToDatabase(); // Ensure the database is connected
 
-    return new Promise((resolve,reject)=>{
-        mongo.connect(url).then(()=>{
-            console.log("connected from auth.js")
-
-            console.log("Successfully connected to the database for login.");
-            return User.findOne({email:email})
-
-        }).then((user)=>{
-            if(user){
-                console.log("User exists");
-                bcrypt.compare(password,user.password).then((verif)=>{
-                    if(verif){  
-                        mongo.disconnect()
-                        resolve(user._id)
-                    }   
-                    else{
-                        mongo.disconnect()
-                        reject('The password entered is incorrect.');
-                    }
-                })
-            } 
-            else{
-                    mongo.disconnect()
-                    console.log("Disconnect from auth.js")
-                    reject('Invalid email address.');
-                }
-            
-           
-            
-        }).catch((err)=>{
-            mongo.disconnect()
-            console.log("Disconnect from auth.js")
-
-            reject(err)
-            })
-        
-            })
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            throw new Error("The email address is already in use. Please try logging in.");
         }
 
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const verificationCode = crypto.randomBytes(4).toString("hex");
+        const verificationCodeExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes expiry
 
-exports.verifyEmail = (email, code) => {
-            return new Promise((resolve, reject) => {
-                mongo.connect(url)
-                    .then(() => {
-                        return User.findOne({ email: email });
-                    })
-                    .then((user) => {
-                        if (!user) {
-                            mongo.disconnect();
-                            reject("User not found.");
-                        } else if (user.verif) {
-                            mongo.disconnect();
-                            reject("User is already verified.");
-                        } else if (user.verificationCode !== code) {
-                            mongo.disconnect();
-                            reject("Invalid verification code.");
-                        } else if (new Date() > user.verificationCodeExpires) {
-                            mongo.disconnect();
-                            reject("Verification code has expired.");
-                        } else {
-                            user.verif = true;
-                            user.verificationCode = undefined; // Clear the code
-                            user.verificationCodeExpires = undefined;
-                            return user.save();
-                        }
-                    })
-                    .then(() => {
-                        mongo.disconnect();
-                        resolve("Email verified successfully.");
-                    })
-                    .catch((err) => {
-                        mongo.disconnect();
-                        reject(err);
-                    });
-            });
+        const user = new User({
+            username: name,
+            email,
+            password: hashedPassword,
+            phone,
+            verif: false,
+            verificationCode,
+            verificationCodeExpires,
+        });
+
+        await user.save();
+
+        const mailOptions = {
+            from: process.env.EMAIL_USER,
+            to: email,
+            subject: "Email Verification",
+            text: `Your verification code is: ${verificationCode}`,
         };
+
+        await transporter.sendMail(mailOptions);
+        return "User registered successfully. Please check your email for the verification code.";
+    } catch (err) {
+        console.error("Error in registerFunModel:", err);
+        throw err;
+    }
+};
+
+// Login function
+const loginFunModel = async (email, password) => {
+    try {
+        await connectToDatabase(); // Ensure the database is connected
+
+        const user = await User.findOne({ email });
+        if (!user) {
+            throw new Error('Invalid email address.');
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            throw new Error('The password entered is incorrect.');
+        }
+
+        return user._id;
+    } catch (err) {
+        console.error("Error in loginFunModel:", err);
+        throw err;
+    }
+};
+
+// Email verification function
+const verifyEmail = async (email, code) => {
+    try {
+        await connectToDatabase(); // Ensure the database is connected
+
+        const user = await User.findOne({ email });
+        if (!user) {
+            throw new Error("User not found.");
+        }
+        if (user.verif) {
+            throw new Error("User is already verified.");
+        }
+        if (user.verificationCode !== code) {
+            throw new Error("Invalid verification code.");
+        }
+        if (new Date() > user.verificationCodeExpires) {
+            throw new Error("Verification code has expired.");
+        }
+
+        user.verif = true;
+        user.verificationCode = undefined;
+        user.verificationCodeExpires = undefined;
+        await user.save();
+
+        return "Email verified successfully.";
+    } catch (err) {
+        console.error("Error in verifyEmail:", err);
+        throw err;
+    }
+};
+
+module.exports = {
+    User,
+    registerFunModel,
+    loginFunModel,
+    verifyEmail,
+};

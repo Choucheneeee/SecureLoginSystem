@@ -1,29 +1,53 @@
-const User = require('../models/users.models');
+const mongoose = require('mongoose');
+const { User } = require('../models/users.models'); // Ensure this path and export are correct
+const url = process.env.url;
 
-exports.requireVerification = (req, res, next) => {
-    if (!req.session || !req.session.userId) {
-        return res.redirect('/login'); 
+// Establish and reuse a single database connection
+const connectToDatabase = async () => {
+    if (mongoose.connection.readyState === 0) { // Check if not already connected
+        try {
+            await mongoose.connect(url);
+            console.log('Connected to MongoDB successfully.');
+        } catch (error) {
+            console.error('Error connecting to MongoDB:', error);
+            process.exit(1); // Exit process if connection fails
+        }
     }
+};
 
-    console.log('Debug: User model', User); 
-    console.log('Session userId:', req.session.userId);
+// Ensure the database is connected during application startup
+(async () => {
+    await connectToDatabase();
+})();
 
-    User.findOne({ _id: req.session.userId })
-        .then((user) => {
-            if (!user) {
-                req.session.destroy(); 
-                return res.redirect('/login');
-            }
+// Function to check if a user is verified
+exports.requireVerification = async (id) => {
+    try {
+        await connectToDatabase(); // Ensure the database is connected before querying
+        console.log("Using User model:", User); // Debugging check
 
-            if (!user.verif) {
-                console.log('User is not verified.');
-                return res.redirect('/verif'); 
-            }
+        // Check if the user exists
+        const user = await User.findById(id);
+        if (!user) {
+            throw new Error('User not found');
+        }
 
-            next();
-        })
-        .catch((err) => {
-            console.error('Error during verification check:', err);
-            res.redirect('/login'); 
-        });
+        // Check if the user is verified
+        if (!user.verif) {
+            throw new Error('User is not verified');
+        }
+
+        return user;
+    } catch (err) {
+        console.error('Error in requireVerification:', err);
+        throw err; // Propagate the error for further handling
+    }
+};
+
+// Middleware to check if the user is logged in
+exports.islogged = (req, res, next) => {
+    if (req.session && req.session.user) {
+        return next();
+    }
+    return res.status(401).json({ error: 'User must log in.' });
 };
